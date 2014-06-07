@@ -1,0 +1,45 @@
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+version = '0.0.1'
+
+compileJava.options.encoding = 'UTF-8'
+compileTestJava.options.encoding = 'UTF-8'
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src/api/java'
+            srcDir 'src/main/java'
+        }
+    }
+    test {
+        java {
+            srcDir 'src/test/java'
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.11'
+}
+
+jar {
+    baseName 'yasly'
+}
+
+def writeToFile(file, text) {
+    File versionFile = file
+    PrintWriter out = new PrintWriter(versionFile)
+    out.println(text)
+    out.close()
+}
+task createInfoFiles << {
+    if (!buildDir.exists()) buildDir.mkdir()
+    writeToFile(new File(buildDir, 'VERSION'), version)
+    writeToFile(new File(buildDir, 'JAR_NAME'), jar.archiveName)
+}
