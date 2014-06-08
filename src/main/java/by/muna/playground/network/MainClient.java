@@ -1,6 +1,6 @@
 package by.muna.playground.network;
 
-import by.muna.network.tcp.IBufferReadable;
+import by.muna.buffers.IBufferReadable;
 import by.muna.network.tcp.ITCPSendStatusListener;
 import by.muna.network.tcp.ITCPSocketListener;
 import by.muna.network.tcp.TCPSocket;

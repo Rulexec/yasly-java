@@ -1,5 +1,7 @@
 package by.muna.network.tcp;
 
+import by.muna.buffers.IBufferReadable;
+
 public interface ITCPSocketListener {
     void onConnected();
 

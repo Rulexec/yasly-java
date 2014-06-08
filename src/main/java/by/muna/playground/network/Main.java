@@ -1,7 +1,7 @@
 package by.muna.playground.network;
 
 import by.muna.callbacks.FinishListener;
-import by.muna.network.tcp.IBufferReadable;
+import by.muna.buffers.IBufferReadable;
 import by.muna.network.tcp.ITCPServerListener;
 import by.muna.network.tcp.ITCPSendStatusListener;
 import by.muna.network.tcp.ITCPSocket;

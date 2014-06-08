@@ -1,18 +1,21 @@
 package by.muna.network.tcp;
 
+import by.muna.buffers.IBufferReadable;
+
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.function.Supplier;
 
 public class TCPSocket implements ITCPSocket {
     private static class WriteRequest {
-        public IByteBufferProvider bufferProvider;
+        public Supplier<ByteBuffer> bufferProvider;
         public ITCPSendStatusListener listener;
 
-        public WriteRequest(IByteBufferProvider bufferProvider, ITCPSendStatusListener listener) {
+        public WriteRequest(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
             this.bufferProvider = bufferProvider;
             this.listener = listener;
         }
@@ -57,7 +60,7 @@ public class TCPSocket implements ITCPSocket {
     }
 
     @Override
-    public void requestWriting(IByteBufferProvider bufferProvider, ITCPSendStatusListener listener) {
+    public void requestWriting(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
         if (this.closed) {
             listener.onFail();
             return;
@@ -87,7 +90,7 @@ public class TCPSocket implements ITCPSocket {
             //SocketSendData data = this.sendQueue.peek();
             WriteRequest writeRequest = this.writeRequests.peek();
 
-            ByteBuffer buffer = writeRequest.bufferProvider.getBuffer();
+            ByteBuffer buffer = writeRequest.bufferProvider.get();
 
             if (buffer == null) {
                 // if IBufferProvider returns null, it means, that user don't want send packet.
