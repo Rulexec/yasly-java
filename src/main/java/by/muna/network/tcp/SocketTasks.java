@@ -1,8 +1,7 @@
 package by.muna.network.tcp;
 
-import by.muna.callbacks.FinishListener;
-
 import java.io.IOException;
+import java.util.function.Consumer;
 
 class SocketTasks {
     public static enum SocketTaskType {
@@ -43,9 +42,9 @@ class SocketTasks {
     }
 
     public static class SocketRegisterTask extends SocketOrServerTask {
-        public FinishListener<IOException> finishListener;
+        public Consumer<IOException> finishListener;
 
-        public SocketRegisterTask(SocketType socketType, Object socket, FinishListener<IOException> listener) {
+        public SocketRegisterTask(SocketType socketType, Object socket, Consumer<IOException> listener) {
             super(SocketTaskType.REGISTER, socketType, socket);
             this.finishListener = listener;
         }

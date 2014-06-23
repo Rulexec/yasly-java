@@ -9,6 +9,12 @@ public interface ITCPSocket {
 
     void setListener(ITCPSocketListener listener);
     void requestWriting(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener);
+    default void requestWriting(ByteBuffer buffer, ITCPSendStatusListener listener) {
+        this.requestWriting(() -> buffer, listener);
+    }
 
     void close();
+
+    void attach(Object attachment);
+    Object attachment();
 }

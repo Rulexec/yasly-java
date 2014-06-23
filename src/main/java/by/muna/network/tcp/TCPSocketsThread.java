@@ -1,8 +1,7 @@
 package by.muna.network.tcp;
 
-import by.muna.callbacks.FinishListener;
-import by.muna.network.tcp.SocketTasks.SocketRegisterTask;
 import by.muna.network.tcp.SocketTasks.SocketOrServerTask;
+import by.muna.network.tcp.SocketTasks.SocketRegisterTask;
 import by.muna.network.tcp.SocketTasks.SocketSocketTask;
 import by.muna.network.tcp.SocketTasks.SocketTask;
 import by.muna.network.tcp.SocketTasks.SocketTaskType;
@@ -18,6 +17,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 
 public class TCPSocketsThread implements ITCPSockets {
     private Thread thread;
@@ -41,7 +41,7 @@ public class TCPSocketsThread implements ITCPSockets {
     }
 
     @Override
-    public void register(ITCPServer iserver, FinishListener<IOException> listener) {
+    public void register(ITCPServer iserver, Consumer<IOException> listener) {
         /*TCPServer server = (TCPServer) iserver;
 
         // Понятия не имею как, но пробуждение перед регистрацией чинит отсутствие реакции
@@ -56,7 +56,7 @@ public class TCPSocketsThread implements ITCPSockets {
     }
 
     @Override
-    public void register(ITCPSocket isocket, FinishListener<IOException> listener) {
+    public void register(ITCPSocket isocket, Consumer<IOException> listener) {
         /*TCPSocket socket = (TCPSocket) isocket;
 
         this.wakeupSelector();
@@ -75,12 +75,12 @@ public class TCPSocketsThread implements ITCPSockets {
     }
 
     @Override
-    public void unregister(ITCPServer server, FinishListener<IOException> listener) {
+    public void unregister(ITCPServer server, Consumer<IOException> listener) {
         throw new RuntimeException("Not implemented yet.");
     }
 
     @Override
-    public void unregister(ITCPSocket socket, FinishListener<IOException> listener) {
+    public void unregister(ITCPSocket socket, Consumer<IOException> listener) {
         throw new RuntimeException("Not implemented yet.");
     }
 
@@ -102,9 +102,9 @@ public class TCPSocketsThread implements ITCPSockets {
                             ((TCPServer) registerTask.socket).serverChannel.register(
                                 this.selector, SelectionKey.OP_ACCEPT, registerTask.socket
                             );
-                            registerTask.finishListener.onFinish(null);
+                            registerTask.finishListener.accept(null);
                         } catch (IOException ex) {
-                            registerTask.finishListener.onFinish(ex);
+                            registerTask.finishListener.accept(ex);
                         }
                         break;
                     case SOCKET:
@@ -121,9 +121,9 @@ public class TCPSocketsThread implements ITCPSockets {
                             }
 
                             socket.channel.register(this.selector, interest, registerTask.socket);
-                            registerTask.finishListener.onFinish(null);
+                            registerTask.finishListener.accept(null);
                         } catch (IOException ex) {
-                            registerTask.finishListener.onFinish(ex);
+                            registerTask.finishListener.accept(ex);
                         }
                         break;
                     default: throw new RuntimeException("Impossible: " + registerTask.socketType);
@@ -258,7 +258,8 @@ public class TCPSocketsThread implements ITCPSockets {
                 ex.printStackTrace();
             }
 
-            server.serverChannel.keyFor(this.selector).cancel();
+            SelectionKey key = server.serverChannel.keyFor(this.selector);
+            if (key != null) key.cancel();
         }
     }
     // Нужно быть аккуратным, выше точь-в-точь такой же метод
@@ -276,7 +277,8 @@ public class TCPSocketsThread implements ITCPSockets {
                 ex.printStackTrace();
             }
 
-            socket.channel.keyFor(this.selector).cancel();
+            SelectionKey key = socket.channel.keyFor(this.selector);
+            if (key != null) key.cancel();
         }
     }
 

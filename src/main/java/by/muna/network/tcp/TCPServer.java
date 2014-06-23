@@ -1,6 +1,7 @@
 package by.muna.network.tcp;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ServerSocketChannel;
 
@@ -17,6 +18,15 @@ public class TCPServer implements ITCPServer {
     @Override
     public void setListener(ITCPServerListener listener) {
         this.listener = listener;
+    }
+
+    @Override
+    public int getPort() {
+        try {
+            return ((InetSocketAddress) this.serverChannel.getLocalAddress()).getPort();
+        } catch (IOException ex) {
+            return 0;
+        }
     }
 
     @Override

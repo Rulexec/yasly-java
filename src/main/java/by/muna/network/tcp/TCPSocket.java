@@ -13,11 +13,32 @@ import java.util.function.Supplier;
 public class TCPSocket implements ITCPSocket {
     private static class WriteRequest {
         public Supplier<ByteBuffer> bufferProvider;
+        private ByteBuffer buffer = null;
+
         public ITCPSendStatusListener listener;
+
+        public int writed = 0;
 
         public WriteRequest(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
             this.bufferProvider = bufferProvider;
             this.listener = listener;
+        }
+
+        public ByteBuffer getBuffer() {
+            if (this.buffer == null) {
+                if (this.bufferProvider != null) {
+                    this.buffer = this.bufferProvider.get();
+                    if (this.buffer == null) {
+                        this.bufferProvider = null;
+                    }
+
+                    return this.buffer;
+                } else {
+                    return null;
+                }
+            } else {
+                return this.buffer;
+            }
         }
     }
 
@@ -29,6 +50,8 @@ public class TCPSocket implements ITCPSocket {
     private ITCPSocketListener listener;
 
     private Queue<WriteRequest> writeRequests = new LinkedList<>();
+
+    private Object attachedObject = null;
 
     public boolean closed = false;
     private boolean onClosedCalled = false;
@@ -62,7 +85,7 @@ public class TCPSocket implements ITCPSocket {
     @Override
     public void requestWriting(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
         if (this.closed) {
-            listener.onFail();
+            listener.onFail(0);
             return;
         }
 
@@ -94,7 +117,7 @@ public class TCPSocket implements ITCPSocket {
 
             if (buffer == null) {
                 // if IBufferProvider returns null, it means, that user don't want send packet.
-                writeRequest.listener.onSent();
+                writeRequest.listener.onCancelled();
 
                 this.writeRequests.poll();
                 continue;
@@ -128,7 +151,7 @@ public class TCPSocket implements ITCPSocket {
     private void failAllRequests() {
         while (!this.writeRequests.isEmpty()) {
             WriteRequest writeRequest = this.writeRequests.poll();
-            writeRequest.listener.onFail();
+            writeRequest.listener.onFail(writeRequest.writed);
         }
     }
 
@@ -182,5 +205,15 @@ public class TCPSocket implements ITCPSocket {
 
         this.failAllRequests();
         this.listener.onClosed();
+    }
+
+    @Override
+    public void attach(Object attachment) {
+        this.attachedObject = attachment;
+    }
+
+    @Override
+    public Object attachment() {
+        return this.attachedObject;
     }
 }
