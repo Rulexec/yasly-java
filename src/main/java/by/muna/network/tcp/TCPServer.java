@@ -1,13 +1,20 @@
 package by.muna.network.tcp;
 
+import by.muna.monads.IAsyncFuture;
+import by.muna.monads.OneTimeEventAsyncFuture;
+
 import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ServerSocketChannel;
+import java.util.function.Consumer;
 
 public class TCPServer implements ITCPServer {
+    TCPSocketsThread mothership;
+
     public ServerSocketChannel serverChannel;
-    private ITCPServerListener listener;
+    private Consumer<ITCPSocket> listener;
+
+    private OneTimeEventAsyncFuture<Object> shutdownEvent = new OneTimeEventAsyncFuture<>();
 
     public TCPServer(SocketAddress local) throws IOException {
         this.serverChannel = ServerSocketChannel.open();
@@ -15,29 +22,32 @@ public class TCPServer implements ITCPServer {
         this.serverChannel.bind(local);
     }
 
-    @Override
-    public void setListener(ITCPServerListener listener) {
-        this.listener = listener;
+    void _connected(TCPSocket socket) {
+        this.listener.accept(socket);
+    }
+    void _shutdown(Object error) {
+        this.shutdownEvent.event(error);
     }
 
     @Override
-    public int getPort() {
+    public SocketAddress getLocalAddress() {
         try {
-            return ((InetSocketAddress) this.serverChannel.getLocalAddress()).getPort();
+            return this.serverChannel.getLocalAddress();
         } catch (IOException ex) {
-            return 0;
+            throw new RuntimeException("We need to handle this", ex);
         }
     }
 
     @Override
-    public void stop() {
-        throw new RuntimeException("Not implemented yet.");
+    public void setConsumer(Consumer<ITCPSocket> listener) {
+        this.listener = listener;
     }
 
-    void onConnected(TCPSocket socket) {
-        this.listener.onConnected(socket);
-    }
-    void onStop() {
-        throw new RuntimeException();
+    @Override
+    public IAsyncFuture<Object> stop() {
+        return callback -> {
+            TCPServer.this.mothership.closeMe(TCPServer.this);
+            TCPServer.this.shutdownEvent.run(callback);
+        };
     }
 }

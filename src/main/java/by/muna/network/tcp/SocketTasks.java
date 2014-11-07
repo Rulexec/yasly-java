@@ -1,6 +1,5 @@
 package by.muna.network.tcp;
 
-import java.io.IOException;
 import java.util.function.Consumer;
 
 class SocketTasks {
@@ -42,11 +41,11 @@ class SocketTasks {
     }
 
     public static class SocketRegisterTask extends SocketOrServerTask {
-        public Consumer<IOException> finishListener;
+        public Consumer<Object> listener;
 
-        public SocketRegisterTask(SocketType socketType, Object socket, Consumer<IOException> listener) {
+        public SocketRegisterTask(SocketType socketType, Object socket, Consumer<Object> listener) {
             super(SocketTaskType.REGISTER, socketType, socket);
-            this.finishListener = listener;
+            this.listener = listener;
         }
     }
 }

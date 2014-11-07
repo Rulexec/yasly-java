@@ -1,65 +1,207 @@
 package by.muna.network.tcp;
 
-import by.muna.buffers.IBufferReadable;
+import by.muna.io.IAsyncByteInputStream;
+import by.muna.io.IAsyncByteOutputStream;
+import by.muna.io.IByteReader;
+import by.muna.io.IByteWriter;
+import by.muna.monads.IAsyncFuture;
+import by.muna.monads.OneTimeEventAsyncFuture;
 
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.function.Supplier;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 public class TCPSocket implements ITCPSocket {
-    private static class WriteRequest {
-        public Supplier<ByteBuffer> bufferProvider;
-        private ByteBuffer buffer = null;
+    private class SocketInputStream implements IAsyncByteInputStream {
+        private Consumer<IByteReader> consumer;
 
-        public ITCPSendStatusListener listener;
-
-        public int writed = 0;
-
-        public WriteRequest(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
-            this.bufferProvider = bufferProvider;
-            this.listener = listener;
+        @Override
+        public void onData(Consumer<IByteReader> consumer) {
+            this.consumer = consumer;
         }
 
-        public ByteBuffer getBuffer() {
-            if (this.buffer == null) {
-                if (this.bufferProvider != null) {
-                    this.buffer = this.bufferProvider.get();
-                    if (this.buffer == null) {
-                        this.bufferProvider = null;
+        @Override
+        public boolean isEnded() {
+            return TCPSocket.this.closed;
+        }
+
+        void raiseEnd() {
+            this.consumer.accept(new IByteReader() {
+                @Override public int read(byte[] buffer, int offset, int length) {
+                    return 0;
+                }
+
+                @Override public int read(ByteBuffer buffer) {
+                    return 0;
+                }
+
+                @Override public boolean isEnd() {
+                    return true;
+                }
+            });
+        }
+
+        void process() throws IOException {
+            if (TCPSocket.this.closed) throw new SocketClosedException();
+
+            class Container {
+                IOException exception = null;
+            }
+
+            Container container = new Container();
+
+            SocketChannel channel = TCPSocket.this.channel;
+
+            this.consumer.accept(new IByteReader() {
+                @Override
+                public int read(ByteBuffer buffer) {
+                    int totalReaded = 0;
+
+                    while (buffer.hasRemaining()) {
+                        int readed;
+
+                        try {
+                            readed = channel.read(buffer);
+                        } catch (IOException ex) {
+                            container.exception = ex;
+                            TCPSocket.this.closed = true;
+                            break;
+                        }
+
+                        if (readed == -1) {
+                            TCPSocket.this.closed = true;
+                            break;
+                        }
+
+                        if (readed == 0) break;
+
+                        totalReaded += readed;
                     }
 
-                    return this.buffer;
-                } else {
-                    return null;
+                    return totalReaded;
                 }
-            } else {
-                return this.buffer;
-            }
+
+                @Override
+                public boolean isEnd() {
+                    return TCPSocket.this.closed;
+                }
+            });
+
+            if (container.exception != null) throw container.exception;
+
+            if (TCPSocket.this.closed) throw new SocketClosedException();
         }
     }
 
-    // TODO: Назвать это как-то иначе
-    public TCPSocketsThread mothership;
+    private class SocketOutputStream implements IAsyncByteOutputStream {
+        boolean writingRequested = false;
+        Function<IByteWriter, Boolean> writer = null;
 
-    public SocketChannel channel;
-    private SocketAddress address;
-    private ITCPSocketListener listener;
+        @Override
+        public void requestWriting() {
+            this.writingRequested = true;
 
-    private Queue<WriteRequest> writeRequests = new LinkedList<>();
+            if (TCPSocket.this.mothership != null) {
+                TCPSocket.this.mothership.requestWriting(TCPSocket.this);
+            }
+        }
 
-    private Object attachedObject = null;
+        @Override
+        public void onCanWrite(Function<IByteWriter, Boolean> writer) {
+            this.writer = writer;
+        }
 
-    public boolean closed = false;
-    private boolean onClosedCalled = false;
+        @Override
+        public void end() {
+            TCPSocket.this.closed = true;
+            TCPSocket.this.mothership.closeMe(TCPSocket.this);
+        }
+
+        @Override
+        public boolean isEnded() {
+            return TCPSocket.this.closed;
+        }
+
+        boolean process() throws IOException {
+            this.writingRequested = false;
+            if (TCPSocket.this.closed) throw new SocketClosedException();
+
+            class Container {
+                IOException exception = null;
+            }
+
+            Container container = new Container();
+
+            SocketChannel channel = TCPSocket.this.channel;
+
+            boolean writingEnded = this.writer.apply(new IByteWriter() {
+                @Override
+                public int write(ByteBuffer buffer) {
+                    if (TCPSocket.this.closed) return 0;
+
+                    int totalWrited = 0;
+
+                    while (buffer.hasRemaining()) {
+                        int writed;
+                        try {
+                            writed = channel.write(buffer);
+                        } catch (IOException ex) {
+                            container.exception = ex;
+                            TCPSocket.this.closed = true;
+                            break;
+                        }
+
+                        if (writed == 0) break;
+
+                        totalWrited += writed;
+                    }
+
+                    return totalWrited;
+                }
+
+                @Override
+                public void end() {
+                    TCPSocket.this.closed = true;
+                }
+
+                @Override
+                public boolean isEnded() {
+                    return TCPSocket.this.closed;
+                }
+            });
+
+            if (container.exception != null) throw container.exception;
+
+            if (TCPSocket.this.closed) {
+                TCPSocket.this.mothership.closeMe(TCPSocket.this);
+            }
+
+            if (!writingEnded) {
+                this.writingRequested = true;
+            }
+
+            return writingEnded;
+        }
+    }
+
+    TCPSocketsThread mothership;
+
+    SocketChannel channel;
+
+    SocketInputStream inputStream = new SocketInputStream();
+    SocketOutputStream outputStream = new SocketOutputStream();
+
+    boolean closed = false;
+
+    private OneTimeEventAsyncFuture<Object> connectionEvent = new OneTimeEventAsyncFuture<>();
+    private OneTimeEventAsyncFuture<Object> shutdownEvent = new OneTimeEventAsyncFuture<>();
 
     TCPSocket(TCPSocketsThread mothership, SocketChannel channel) throws IOException {
         this.mothership = mothership;
         this.channel = channel;
-        this.address = channel.getRemoteAddress();
     }
     public TCPSocket(SocketAddress remote) throws IOException {
         this.channel = SocketChannel.open();
@@ -68,152 +210,72 @@ public class TCPSocket implements ITCPSocket {
         this.channel.connect(remote);
     }
 
-    public boolean isWritingRequested() {
-        return !this.writeRequests.isEmpty();
+    boolean isWritingRequested() {
+        return this.outputStream.writingRequested;
     }
 
-    @Override
-    public SocketAddress getAddress() {
-        return this.address;
+    void _connection(Object error) {
+        this.connectionEvent.event(error);
     }
-
-    @Override
-    public void setListener(ITCPSocketListener listener) {
-        this.listener = listener;
-    }
-
-    @Override
-    public void requestWriting(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener) {
-        if (this.closed) {
-            listener.onFail(0);
-            return;
+    void _shutdown(Object error) {
+        if (!this.shutdownEvent.isEventHappened()) {
+            this.inputStream.raiseEnd();
         }
 
-        this.writeRequests.add(new WriteRequest(bufferProvider, listener));
-        this.mothership.requestWriting(this);
-    }
-
-    @Override
-    public void close() {
-        this.closed = true;
-        this.mothership.closeMe(this);
+        this.shutdownEvent.event(error);
     }
 
     /**
-     * @return true, если больше нечего отправлять
+     * @return true, if all what needed is written
      * @throws IOException
      */
-    boolean send() throws IOException {
-        if (this.closed) {
-            this.failAllRequests();
-            throw new SocketClosedException();
-        }
-
-        while (!this.writeRequests.isEmpty()) {
-            //SocketSendData data = this.sendQueue.peek();
-            WriteRequest writeRequest = this.writeRequests.peek();
-
-            ByteBuffer buffer = writeRequest.bufferProvider.get();
-
-            if (buffer == null) {
-                // if IBufferProvider returns null, it means, that user don't want send packet.
-                writeRequest.listener.onCancelled();
-
-                this.writeRequests.poll();
-                continue;
-            }
-
-            int writed;
-
-            try {
-                writed = this.channel.write(buffer);
-            } catch (IOException ex) {
-                this.failAllRequests();
-                throw ex;
-            }
-
-            if (writed == -1) {
-                this.failAllRequests();
-                throw new SocketClosedException();
-            }
-
-            if (!buffer.hasRemaining()) {
-                this.writeRequests.poll();
-
-                writeRequest.listener.onSent();
-            }
-
-            if (writed == 0) break;
-        }
-
-        return this.writeRequests.isEmpty();
+    boolean _send() throws IOException {
+        return this.outputStream.process();
     }
-    private void failAllRequests() {
-        while (!this.writeRequests.isEmpty()) {
-            WriteRequest writeRequest = this.writeRequests.poll();
-            writeRequest.listener.onFail(writeRequest.writed);
-        }
-    }
-
-    void receive() throws IOException {
-        if (this.closed) throw new SocketClosedException();
-
-        class Container {
-            public IOException exception = null;
-            public boolean isClosed = false;
-        }
-
-        final Container container = new Container();
-
-        this.listener.onData(new IBufferReadable() {
-            @Override
-            public int read(ByteBuffer buffer) {
-                int readed;
-
-                try {
-                    readed = TCPSocket.this.channel.read(buffer);
-                } catch (IOException ex) {
-                    container.exception = ex;
-                    return 0;
-                }
-
-                if (readed != -1) {
-                    return readed;
-                } else {
-                    container.isClosed = true;
-                    return 0;
-                }
-            }
-        });
-
-        if (container.exception != null) {
-            throw container.exception;
-        }
-
-        if (container.isClosed) {
-            throw new SocketClosedException();
-        }
-    }
-
-    void onConnected() {
-        this.listener.onConnected();
-    }
-    void onClosed() {
-        if (this.onClosedCalled) return;
-        this.closed = true;
-        this.onClosedCalled = true;
-
-        this.failAllRequests();
-        this.listener.onClosed();
+    void _receive() throws IOException {
+        this.inputStream.process();
     }
 
     @Override
-    public void attach(Object attachment) {
-        this.attachedObject = attachment;
+    public IAsyncByteInputStream getInputStream() {
+        return this.inputStream;
     }
 
     @Override
-    public Object attachment() {
-        return this.attachedObject;
+    public IAsyncByteOutputStream getOutputStream() {
+        return this.outputStream;
+    }
+
+    @Override
+    public IAsyncFuture<Object> onConnection() {
+        return this.connectionEvent;
+    }
+
+    @Override
+    public IAsyncFuture<Object> onShutdown() {
+        return this.shutdownEvent;
+    }
+
+    @Override
+    public SocketAddress getRemoteAddress() {
+        try {
+            return this.channel.getRemoteAddress();
+        } catch (IOException ex) {
+            throw new RuntimeException("We should handle this", ex);
+        }
+    }
+
+    @Override
+    public SocketAddress getLocalAddress() {
+        try {
+            return this.channel.getLocalAddress();
+        } catch (IOException ex) {
+            throw new RuntimeException("We should handle this", ex);
+        }
+    }
+
+    @Override
+    public boolean isClosed() {
+        return this.closed;
     }
 }

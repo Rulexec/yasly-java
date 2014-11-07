@@ -1,9 +1,17 @@
 package by.muna.network.tcp;
 
+import by.muna.monads.IAsyncFuture;
+
+import java.net.SocketAddress;
+import java.util.function.Consumer;
+
 public interface ITCPServer {
-    void setListener(ITCPServerListener listener);
+    SocketAddress getLocalAddress();
 
-    int getPort();
+    void setConsumer(Consumer<ITCPSocket> listener);
 
-    void stop();
+    /**
+     * @return null or error
+     */
+    IAsyncFuture<Object> stop();
 }

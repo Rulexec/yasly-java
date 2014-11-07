@@ -1,20 +1,29 @@
 package by.muna.network.tcp;
 
+import by.muna.io.IAsyncByteInputStream;
+import by.muna.io.IAsyncByteOutputStream;
+import by.muna.monads.IAsyncFuture;
+
 import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.util.function.Supplier;
 
 public interface ITCPSocket {
-    SocketAddress getAddress();
+    SocketAddress getRemoteAddress();
+    SocketAddress getLocalAddress();
 
-    void setListener(ITCPSocketListener listener);
-    void requestWriting(Supplier<ByteBuffer> bufferProvider, ITCPSendStatusListener listener);
-    default void requestWriting(ByteBuffer buffer, ITCPSendStatusListener listener) {
-        this.requestWriting(() -> buffer, listener);
-    }
+    IAsyncByteInputStream getInputStream();
+    IAsyncByteOutputStream getOutputStream();
 
-    void close();
+    /**
+     * Returns null if successfully connected, or error, if not.
+     * @return
+     */
+    IAsyncFuture<Object> onConnection();
+    /**
+     * Returns error. If null -- no error happened.
+     * If error is happened at connection, then this will be called too with the same error.
+     * @return
+     */
+    IAsyncFuture<Object> onShutdown();
 
-    void attach(Object attachment);
-    Object attachment();
+    boolean isClosed();
 }

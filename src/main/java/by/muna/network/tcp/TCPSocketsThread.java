@@ -1,5 +1,8 @@
 package by.muna.network.tcp;
 
+import by.muna.data.IPair;
+import by.muna.data.Pair;
+import by.muna.monads.IAsyncFuture;
 import by.muna.network.tcp.SocketTasks.SocketOrServerTask;
 import by.muna.network.tcp.SocketTasks.SocketRegisterTask;
 import by.muna.network.tcp.SocketTasks.SocketSocketTask;
@@ -17,13 +20,14 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.function.Consumer;
 
 public class TCPSocketsThread implements ITCPSockets {
     private Thread thread;
     private Selector selector;
 
     private ConcurrentLinkedQueue<SocketTask> socketTasks = new ConcurrentLinkedQueue<>();
+
+    private boolean stopped = false;
 
     public TCPSocketsThread() throws IOException {
         this.selector = Selector.open();
@@ -35,60 +39,56 @@ public class TCPSocketsThread implements ITCPSockets {
     public void join() throws InterruptedException {
         this.thread.join();
     }
+    public void stop() {
+        this.stopped = true;
+        this.wakeupSelector();
+    }
 
     private void wakeupSelector() {
         this.selector.wakeup();
     }
 
     @Override
-    public void register(ITCPServer iserver, Consumer<IOException> listener) {
-        /*TCPServer server = (TCPServer) iserver;
-
-        // Понятия не имею как, но пробуждение перед регистрацией чинит отсутствие реакции
-        // на wakeup после регистрации.
-        this.wakeupSelector();
-
-        SelectionKey key = server.serverChannel.register(this.selector, SelectionKey.OP_ACCEPT, server);*/
+    public IAsyncFuture<Object> register(ITCPServer iserver) {
+        if (this.stopped) return callback -> callback.accept("stopped");
 
         TCPServer server = (TCPServer) iserver;
-        this.socketTasks.add(new SocketRegisterTask(SocketType.SERVER, server, listener));
-        this.wakeupSelector();
+
+        return callback -> {
+            this.socketTasks.add(new SocketRegisterTask(SocketType.SERVER, server, callback));
+            this.wakeupSelector();
+        };
     }
 
     @Override
-    public void register(ITCPSocket isocket, Consumer<IOException> listener) {
-        /*TCPSocket socket = (TCPSocket) isocket;
-
-        this.wakeupSelector();
-
-        if (socket.channel.isConnectionPending()) {
-            socket.channel.register(this.selector, SelectionKey.OP_CONNECT, socket);
-        } else {
-            socket.channel.register(this.selector, SelectionKey.OP_READ, socket);
-        }*/
+    public IAsyncFuture<Object> register(ITCPSocket isocket) {
+        if (this.stopped) return callback -> callback.accept("stopped");
 
         TCPSocket socket = (TCPSocket) isocket;
-        socket.mothership = this;
 
-        this.socketTasks.add(new SocketRegisterTask(SocketType.SOCKET, socket, listener));
-        this.wakeupSelector();
+        return callback -> {
+            socket.mothership = this;
+
+            this.socketTasks.add(new SocketRegisterTask(SocketType.SOCKET, socket, callback));
+            this.wakeupSelector();
+        };
     }
 
     @Override
-    public void unregister(ITCPServer server, Consumer<IOException> listener) {
+    public IAsyncFuture<Object> unregister(ITCPServer server) {
         throw new RuntimeException("Not implemented yet.");
     }
 
     @Override
-    public void unregister(ITCPSocket socket, Consumer<IOException> listener) {
+    public IAsyncFuture<Object> unregister(ITCPSocket socket) {
         throw new RuntimeException("Not implemented yet.");
     }
 
     private void run() {
-        Queue<TCPServer> serversToClose = new LinkedList<>();
-        Queue<TCPSocket> socketsToClose = new LinkedList<>();
+        Queue<IPair<TCPServer, Object>> serversToClose = new LinkedList<>();
+        Queue<IPair<TCPSocket, Object>> socketsToClose = new LinkedList<>();
 
-        while (true) {
+        working: while (!this.stopped) {
             while (!this.socketTasks.isEmpty()) {
                 SocketTask task = this.socketTasks.poll();
 
@@ -102,9 +102,9 @@ public class TCPSocketsThread implements ITCPSockets {
                             ((TCPServer) registerTask.socket).serverChannel.register(
                                 this.selector, SelectionKey.OP_ACCEPT, registerTask.socket
                             );
-                            registerTask.finishListener.accept(null);
+                            registerTask.listener.accept(null);
                         } catch (IOException ex) {
-                            registerTask.finishListener.accept(ex);
+                            registerTask.listener.accept(ex);
                         }
                         break;
                     case SOCKET:
@@ -118,17 +118,19 @@ public class TCPSocketsThread implements ITCPSockets {
                                 interest = SelectionKey.OP_READ | (
                                     socket.isWritingRequested() ? SelectionKey.OP_WRITE : 0
                                 );
+                                socket._connection(null);
                             }
 
                             socket.channel.register(this.selector, interest, registerTask.socket);
-                            registerTask.finishListener.accept(null);
+                            registerTask.listener.accept(null);
                         } catch (IOException ex) {
-                            registerTask.finishListener.accept(ex);
+                            registerTask.listener.accept(ex);
                         }
                         break;
                     default: throw new RuntimeException("Impossible: " + registerTask.socketType);
                     }
                 } break;
+                case UNREGISTER: throw new RuntimeException("Not implemented yet");
                 case WRITE_REQUEST: {
                     SocketSocketTask writingTask = (SocketSocketTask) task;
                     SelectionKey key = writingTask.socket.channel.keyFor(this.selector);
@@ -140,15 +142,15 @@ public class TCPSocketsThread implements ITCPSockets {
                             key.interestOps(oldInterest | SelectionKey.OP_WRITE);
                         }
                     } else {
-                        socketsToClose.add(writingTask.socket);
+                        socketsToClose.add(new Pair<>(writingTask.socket, null));
                     }
                 } break;
                 case CLOSE: {
                     SocketOrServerTask closeTask = (SocketOrServerTask) task;
 
                     switch (closeTask.socketType) {
-                    case SERVER: serversToClose.add((TCPServer) closeTask.socket); break;
-                    case SOCKET: socketsToClose.add((TCPSocket) closeTask.socket); break;
+                    case SERVER: serversToClose.add(new Pair<>((TCPServer) closeTask.socket, null)); break;
+                    case SOCKET: socketsToClose.add(new Pair<>((TCPSocket) closeTask.socket, null)); break;
                     default: throw new RuntimeException("Impossible: " + closeTask.socketType);
                     }
                 } break;
@@ -193,64 +195,113 @@ public class TCPSocketsThread implements ITCPSockets {
                             socketKey.attach(newSocketController);
                             //System.out.println("accepted, bro");
 
-                            server.onConnected(newSocketController);
+                            server._connected(newSocketController);
 
                             continue;
                         }
                     } catch (IOException ex) {
-                        serversToClose.add((TCPServer) attachment);
+                        serversToClose.add(new Pair<>((TCPServer) attachment, ex));
                     }
 
                     TCPSocket socket = (TCPSocket) attachment;
 
                     if (socket.closed) {
-                        socketsToClose.add(socket);
+                        socketsToClose.add(new Pair<>(socket, null));
                         continue;
                     }
 
                     try {
                         if ((key.interestOps() & SelectionKey.OP_CONNECT) != 0) {
-                            if (key.isConnectable() && socket.channel.finishConnect()) {
-                                key.interestOps(SelectionKey.OP_READ);
+                            try {
+                                if (key.isConnectable() && socket.channel.finishConnect()) {
+                                    key.interestOps(SelectionKey.OP_READ |
+                                        (socket.isWritingRequested() ? SelectionKey.OP_WRITE : 0));
 
-                                socket.onConnected();
-                            } else {
-                                continue;
+                                    socket._connection(null);
+                                } else {
+                                    continue;
+                                }
+                            } catch (IOException ex) {
+                                socket._connection(ex);
+                                throw ex;
                             }
                         }
 
                         if (key.isReadable()) {
                             //System.out.println("yo, readable");
-                            socket.receive();
+                            socket._receive();
                         }
 
                         if (key.isWritable()) {
-                            if (socket.send()) {
+                            if (socket._send()) {
                                 key.interestOps(SelectionKey.OP_READ);
                             }
                         }
                     } catch (IOException ex) {
-                        socketsToClose.add(socket);
+                        socketsToClose.add(new Pair<>(socket, ex));
                     }
                 }
             }
 
             this.closeServersAndSockets(serversToClose, socketsToClose);
         }
+
+        /* We must:
+         *   - clean tasks queue
+         *   - close all active servers&sockets
+         */
+
+        while (!this.socketTasks.isEmpty()) {
+            SocketTask task = this.socketTasks.poll();
+            switch (task.type) {
+            case REGISTER: {
+                SocketRegisterTask registerTask = (SocketRegisterTask) task;
+
+                switch (registerTask.socketType) {
+                case SERVER: serversToClose.add(new Pair<>((TCPServer) registerTask.socket, null)); break;
+                case SOCKET: socketsToClose.add(new Pair<>((TCPSocket) registerTask.socket, null)); break;
+                default: throw new RuntimeException("Impossible: " + registerTask.socketType);
+                }
+            } break;
+            case UNREGISTER: throw new RuntimeException("Not implemented yet");
+            case WRITE_REQUEST: break;
+            case CLOSE: break;
+            default: throw new RuntimeException("Impossible: " + task.type);
+            }
+        }
+
+        for (SelectionKey key : this.selector.keys()) {
+            Object attachment = key.attachment();
+
+            if (attachment instanceof TCPSocket) {
+                socketsToClose.add(new Pair<>((TCPSocket) attachment, null)); break;
+            } else if (attachment instanceof TCPServer) {
+                serversToClose.add(new Pair<>((TCPServer) attachment, null));
+            } else {
+                throw new RuntimeException("Unknown attachment: " + attachment);
+            }
+        }
+
+        this.closeServersAndSockets(serversToClose, socketsToClose);
     }
 
-    private void closeServersAndSockets(Collection<TCPServer> servers, Collection<TCPSocket> sockets) {
+    private void closeServersAndSockets(
+        Collection<IPair<TCPServer, Object>> servers, Collection<IPair<TCPSocket, Object>> sockets)
+    {
         if (!servers.isEmpty()) this.closeServers(servers);
         if (!sockets.isEmpty()) this.closeSockets(sockets);
     }
     // Нужно быть аккуратным, ниже точь-в-точь такой же метод
-    private void closeServers(Iterable<TCPServer> servers) {
-        Iterator<TCPServer> it = servers.iterator();
+    private void closeServers(Iterable<IPair<TCPServer, Object>> servers) {
+        Iterator<IPair<TCPServer, Object>> it = servers.iterator();
         while (it.hasNext()) {
-            TCPServer server = it.next();
+            IPair<TCPServer, Object> serverWithReason = it.next();
             it.remove();
 
-            server.onStop();
+            TCPServer server = serverWithReason.getFirst();
+            Object reason = serverWithReason.getSecond();
+
+            server._shutdown(reason);
 
             try {
                 server.serverChannel.close();
@@ -263,13 +314,16 @@ public class TCPSocketsThread implements ITCPSockets {
         }
     }
     // Нужно быть аккуратным, выше точь-в-точь такой же метод
-    private void closeSockets(Iterable<TCPSocket> sockets) {
-        Iterator<TCPSocket> it = sockets.iterator();
+    private void closeSockets(Iterable<IPair<TCPSocket, Object>> sockets) {
+        Iterator<IPair<TCPSocket, Object>> it = sockets.iterator();
         while (it.hasNext()) {
-            TCPSocket socket = it.next();
+            IPair<TCPSocket, Object> socketWithReason = it.next();
             it.remove();
 
-            socket.onClosed();
+            TCPSocket socket = socketWithReason.getFirst();
+            Object reason = socketWithReason.getSecond();
+
+            socket._shutdown(reason);
 
             try {
                 socket.channel.close();
